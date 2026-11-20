@@ -2,6 +2,8 @@
 -- Same rules as app/detection.py. The detection window starts 2026-10-02 to match the
 -- synthetic data; for real use replace it with DATEADD('day', -30, CURRENT_DATE()).
 -- These are views, not Dynamic Tables: Dynamic Tables do not support MATCH_RECOGNIZE.
+-- Each RULE_* view returns one row per flagged customer with a WHY evidence column; the app
+-- reads these views in Snowflake mode and applies the on-screen weights to them.
 USE ROLE ATO_DEMO_ROLE;
 USE WAREHOUSE ATO_DEMO_WH;
 USE SCHEMA ACCOUNT_TAKEOVER.DATA;
@@ -29,7 +31,10 @@ stream AS (
   WHERE t.txn_ts >= start_ts
 )
 SELECT customer_id, MIN(cred_change_ts) AS cred_change_ts, MIN(new_payee) AS new_payee,
-       MAX(transfer_amount) AS transfer_amount
+       MAX(transfer_amount) AS transfer_amount,
+       MIN_BY(LOWER(REPLACE(cred_change, '_', ' ')) || ' ' || TO_CHAR(cred_change_ts, 'Mon DD HH24:MI')
+              || ', payee ' || new_payee || ' added, $' || TRIM(TO_CHAR(transfer_amount, '999,999,999,990'))
+              || ' sent ' || TO_CHAR(transfer_ts, 'HH24:MI'), cred_change_ts) AS why
 FROM stream
   MATCH_RECOGNIZE (
     PARTITION BY customer_id, payee_key
@@ -62,7 +67,9 @@ s AS (
          GREATEST(DATEDIFF('second', prev_ts, event_ts) / 3600, 1 / 60) AS hours
   FROM l WHERE prev_ts IS NOT NULL AND event_ts >= '2026-10-02'::TIMESTAMP_NTZ
 )
-SELECT customer_id, MAX(km / hours) AS max_kmh
+SELECT customer_id, MAX(km / hours) AS max_kmh,
+       MIN_BY(prev_city || ' to ' || city || ': ' || TRIM(TO_CHAR(ROUND(km), '999,999,990')) || ' km in '
+              || TRIM(TO_CHAR(ROUND(hours * 60), '999,999,990')) || ' minutes', event_ts) AS why
 FROM s WHERE km >= 500 AND km / hours > 900
 GROUP BY customer_id;
 
@@ -74,7 +81,9 @@ WITH e AS (
     ROW_NUMBER() OVER (PARTITION BY customer_id, country   ORDER BY event_ts, event_id) AS cty_seq
   FROM IDENTITY_EVENTS
 )
-SELECT e.customer_id, MIN(e.event_ts) AS login_ts, MIN(e.country) AS country
+SELECT e.customer_id, MIN(e.event_ts) AS login_ts, MIN(e.country) AS country,
+       MIN_BY('first login from device ' || e.device_id || ' in ' || e.city || ', ' || e.country
+              || ', then a payment', e.event_ts) AS why
 FROM e
 WHERE e.event_type = 'LOGIN_SUCCESS' AND e.event_ts >= '2026-10-02'::TIMESTAMP_NTZ
   AND e.dev_seq = 1 AND e.cty_seq = 1
@@ -83,16 +92,17 @@ GROUP BY e.customer_id;
 
 -- 4. MFA fatigue: an approval preceded by 5+ denials in the previous 10 minutes.
 CREATE OR REPLACE VIEW RULE_MFA_FATIGUE AS
-SELECT a.customer_id, MAX(n) AS denials
+SELECT a.customer_id, MAX(n) AS denials,
+       MIN_BY(n || ' MFA denials then an approval at ' || TO_CHAR(a.event_ts, 'Mon DD HH24:MI'), a.event_ts) AS why
 FROM (
-  SELECT ap.customer_id, ap.event_id, COUNT(d.event_id) AS n
+  SELECT ap.customer_id, ap.event_id, ap.event_ts, COUNT(d.event_id) AS n
   FROM IDENTITY_EVENTS ap
   JOIN IDENTITY_EVENTS d
     ON d.customer_id = ap.customer_id AND d.event_type = 'MFA_DENY'
    AND d.event_ts < ap.event_ts AND d.event_ts >= DATEADD('minute', -10, ap.event_ts)
    AND d.event_ts >= '2026-10-02'::TIMESTAMP_NTZ
   WHERE ap.event_type = 'MFA_APPROVE' AND ap.event_ts >= '2026-10-02'::TIMESTAMP_NTZ
-  GROUP BY ap.customer_id, ap.event_id
+  GROUP BY ap.customer_id, ap.event_id, ap.event_ts
 ) a
 WHERE n >= 5
 GROUP BY a.customer_id;
@@ -104,7 +114,9 @@ bad AS (
   SELECT ip_address, COUNT(DISTINCT customer_id) AS customers_failed
   FROM w WHERE event_type = 'LOGIN_FAIL' GROUP BY ip_address HAVING COUNT(DISTINCT customer_id) >= 8
 )
-SELECT w.customer_id, MIN(w.ip_address) AS ip_address, MAX(bad.customers_failed) AS customers_failed
+SELECT w.customer_id, MIN(w.ip_address) AS ip_address, MAX(bad.customers_failed) AS customers_failed,
+       MIN_BY('login from ' || w.ip_address || ', which failed against ' || bad.customers_failed || ' customers',
+              w.event_ts) AS why
 FROM w JOIN bad ON bad.ip_address = w.ip_address
 WHERE w.event_type = 'LOGIN_SUCCESS'
 GROUP BY w.customer_id;
@@ -115,7 +127,9 @@ WITH base AS (
   SELECT customer_id, MEDIAN(amount) AS baseline_median
   FROM TRANSACTIONS WHERE txn_ts < '2026-10-02'::TIMESTAMP_NTZ GROUP BY customer_id
 )
-SELECT t.customer_id, MAX(t.amount) AS max_amount, MAX(b.baseline_median) AS baseline_median
+SELECT t.customer_id, MAX(t.amount) AS max_amount, MAX(b.baseline_median) AS baseline_median,
+       MIN_BY('$' || TRIM(TO_CHAR(t.amount, '999,999,999,990')) || ' against a baseline median of $'
+              || TRIM(TO_CHAR(ROUND(b.baseline_median), '999,999,999,990')), t.txn_ts) AS why
 FROM TRANSACTIONS t JOIN base b ON b.customer_id = t.customer_id
 WHERE t.txn_ts >= '2026-10-02'::TIMESTAMP_NTZ AND t.amount >= 1000 AND t.amount > 3 * b.baseline_median
 GROUP BY t.customer_id;

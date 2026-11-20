@@ -10,7 +10,7 @@ st.title("Account takeover alert queue")
 st.caption("Detection window 2 October to 1 November 2026 · customers ranked by the rules they triggered")
 with st.container(horizontal=True):
     if ctx["live"]:
-        st.badge("Reading Snowflake tables", icon=":material/cloud_done:", color="blue")
+        st.badge("Rules from Snowflake SQL views", icon=":material/cloud_done:", color="blue")
     else:
         st.badge("Sample data", icon=":material/database:", color="gray")
     if not ctx["default_weights"]:

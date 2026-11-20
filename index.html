@@ -53,7 +53,7 @@
     <h2 id="how">How it works</h2>
     <ol class="steps">
       <li><strong>Synthetic data.</strong> 1,500 customers with 60 days of logins, MFA events, account changes and transfers. 40 injected takeovers across four attack styles, plus 71 legitimate look-alikes: travellers, VPN users, new phones and large purchases.</li>
-      <li><strong>Six rules as SQL views.</strong> Takeover sequence (<code>MATCH_RECOGNIZE</code>), impossible travel (<code>HAVERSINE</code>, <code>LAG</code>), new device and country, MFA fatigue, credential stuffing and unusual amount. Each rule records its evidence.</li>
+      <li><strong>Six rules as SQL views.</strong> Takeover sequence (<code>MATCH_RECOGNIZE</code>), impossible travel (<code>HAVERSINE</code>, <code>LAG</code>), new device and country, MFA fatigue, credential stuffing and unusual amount. Each rule records its evidence, and in Snowflake mode the app reads its hits from these views.</li>
       <li><strong>Scored alerts.</strong> An <code>ATO_ALERTS</code> view adds weights from a <code>RULE_WEIGHTS</code> table, so the score is a sum you can explain.</li>
       <li><strong>Cortex AI_COMPLETE.</strong> Drafts a case summary from the evidence for the top 20 alerts and stores it, so model use stays small and bounded.</li>
       <li><strong>Streamlit app.</strong> Runs locally on sample data with no account, or against Snowflake, including as Streamlit in Snowflake.</li>

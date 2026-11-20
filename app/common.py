@@ -20,9 +20,17 @@ def _live():
     return detection.prepare(ds.live_frames())
 
 
+@st.cache_data(ttl="15m", show_spinner="Querying the SQL rule views")
+def _live_hits():
+    return ds.live_rule_hits()
+
+
 @st.cache_data(ttl="1h", show_spinner="Running detection rules")
 def _flags(source: str):
-    return detection.evaluate(_live() if source == LIVE else _sample())
+    # Snowflake mode: rule hits come from the RULE_* views. Sample mode: the Python rules in detection.py.
+    if source == LIVE:
+        return detection.evaluate(_live(), _live_hits())
+    return detection.evaluate(_sample())
 
 
 def default_mode() -> str:

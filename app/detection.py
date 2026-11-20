@@ -1,4 +1,5 @@
 """Account takeover rules. The same rules are implemented in sql/03_detection_rules.sql.
+Sample mode runs the Python rules below; Snowflake mode reads hits from the SQL rule views.
 
 Each rule looks only at the detection window (2026-10-02 onwards) and fires at most once
 per customer. A customer's alert score is the sum of the weights of the rules that fired.
@@ -169,9 +170,12 @@ RULE_FUNCS = {
 }
 
 
-def evaluate(d: dict) -> pd.DataFrame:
-    """One row per customer that fired at least one rule: a 0/1 column and an evidence column per rule."""
-    res = {r: f(d) for r, f in RULE_FUNCS.items()}
+def evaluate(d: dict, hits: dict | None = None) -> pd.DataFrame:
+    """One row per customer that fired at least one rule: a 0/1 column and an evidence column per rule.
+
+    hits is {rule: {customer_id: evidence}} from the SQL views; without it the Python rules run (sample mode).
+    """
+    res = hits if hits is not None else {r: f(d) for r, f in RULE_FUNCS.items()}
     custs = sorted(set().union(*[set(h) for h in res.values()]))
     out = pd.DataFrame({"customer_id": custs})
     for r, h in res.items():
